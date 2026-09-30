@@ -370,150 +370,14 @@ def escrever_tabela(
     return ultima_linha + 2
 
 
-# ============================================================
-# INSERIR DADOS NO TEMPLATE
-# ============================================================
-
-def inserir_dados_no_template(
-    caminho_template: Path,
-    caminho_saida: Path,
-    dados_servidor: dict,
-    rubricas_vencimentos: list[dict],
-    rubricas_descontos: list[dict],
-) -> None:
-
-    # --------------------------------------------------------
-    # ABRE O TEMPLATE
-    # --------------------------------------------------------
-
-    wb = load_workbook(
-        caminho_template,
-        keep_vba=True,
-        data_only=False
-    )
-
-    # --------------------------------------------------------
-    # SELECIONA A PLANILHA
-    # --------------------------------------------------------
-
-    if NOME_ABA not in wb.sheetnames:
-        raise ValueError(
-            f"A aba '{NOME_ABA}' não foi encontrada no template."
-        )
-
-    ws = wb[NOME_ABA]
-
-    # --------------------------------------------------------
-    # ENCONTRA A ÚLTIMA LINHA DO ANEXO V
-    # --------------------------------------------------------
-
-    ultima_linha = encontrar_ultima_linha_preenchida(ws)
-
-    # Deixa uma linha em branco entre o template
-    # e os dados da ficha financeira.
-
-    linha = ultima_linha + 5
-
-    # --------------------------------------------------------
-    # DADOS DO SERVIDOR
-    # --------------------------------------------------------
-
-    # A tabela possui 17 colunas (A:Q).
-    # Os dados do servidor serão colocados à direita.
-    coluna_dados = len(["Código", "Descrição", *COLUNAS_VALORES]) + 2
-
-    ws.cell(
-        2,
-        coluna_dados,
-        "DADOS DO SERVIDOR"
-    )
-
-    ws.cell(
-        2,
-        coluna_dados
-    ).font = Font(
-        bold=True,
-        size=14
-    )
-
-    linha_dados = 4
-
-    for campo, valor in dados_servidor.items():
-        ws.cell(
-            linha_dados,
-            coluna_dados,
-            campo
-        ).font = Font(
-            bold=True
-        )
-
-        ws.cell(
-            linha_dados,
-            coluna_dados + 1,
-            valor
-        )
-
-        linha_dados += 1
-
-    # --------------------------------------------------------
-    # VENCIMENTOS
-    # --------------------------------------------------------
-
-    linha = escrever_tabela(
-        ws,
-        linha + 1,
-        "VENCIMENTOS",
-        rubricas_vencimentos,
-    )
-
-    # --------------------------------------------------------
-    # DESCONTOS
-    # --------------------------------------------------------
-
-    linha = escrever_tabela(
-        ws,
-        linha,
-        "DESCONTOS",
-        rubricas_descontos,
-    )
-
-    # --------------------------------------------------------
-    # RECÁLCULO DAS FÓRMULAS
-    # --------------------------------------------------------
-
-    # O template continua contendo suas fórmulas.
-    # Esta configuração solicita ao Excel que recalcule
-    # as fórmulas quando o arquivo for aberto.
-
-    try:
-        wb.calculation.fullCalcOnLoad = True
-        wb.calculation.forceFullCalc = True
-        wb.calculation.calcMode = "auto"
-    except AttributeError:
-        pass
-
-    # --------------------------------------------------------
-    # SALVAR NOVO ARQUIVO
-    # --------------------------------------------------------
-
-    caminho_saida.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    wb.save(caminho_saida)
-
-
-# ============================================================
-# SEPARAR FICHAS
-# ============================================================
-
 def separar_fichas(texto: str) -> list[str]:
     """
-    Separa o PDF em fichas financeiras individuais.
+    Separa as fichas financeiras individuais.
 
-    Cada ficha começa em:
-    'Ficha Financeira Resumo Geral do Ano de XXXX'
+    O PDF pode repetir o cabeçalho em páginas seguintes.
+    Por isso, após separar pelas ocorrências do cabeçalho,
+    somente trechos que contenham os totais da ficha são
+    considerados fichas válidas.
     """
 
     padrao = re.compile(
@@ -521,7 +385,9 @@ def separar_fichas(texto: str) -> list[str]:
         flags=re.IGNORECASE
     )
 
-    ocorrencias = list(padrao.finditer(texto))
+    ocorrencias = list(
+        padrao.finditer(texto)
+    )
 
     if not ocorrencias:
         raise ValueError(
@@ -539,46 +405,123 @@ def separar_fichas(texto: str) -> list[str]:
         else:
             fim = len(texto)
 
-        ficha = texto[inicio:fim].strip()
+        trecho = texto[
+            inicio:fim
+        ].strip()
 
-        if ficha:
-            fichas.append(ficha)
+        # ----------------------------------------------------
+        # VALIDAR SE É UMA FICHA REAL
+        # ----------------------------------------------------
+
+        possui_vencimentos = re.search(
+            r"Total\s+de\s+Vencimentos",
+            trecho,
+            flags=re.IGNORECASE
+        )
+
+        possui_descontos = re.search(
+            r"Total\s+de\s+Descontos",
+            trecho,
+            flags=re.IGNORECASE
+        )
+
+        if (
+            possui_vencimentos
+            and possui_descontos
+        ):
+            fichas.append(
+                trecho
+            )
+
+    if not fichas:
+        raise ValueError(
+            "Não foi encontrada nenhuma ficha financeira válida."
+        )
 
     return fichas
 
 
 # ============================================================
-# PROCESSAMENTO
+# EXTRAIR ANO DO PDF
 # ============================================================
 
-def processar(
-    caminho_pdf: Path,
+def extrair_ano_pdf(texto: str) -> int:
+    """
+    Extrai o ano da ficha financeira.
+    """
+
+    padrao = re.search(
+        r"Ficha\s+Financeira\s+Resumo\s+Geral\s+do\s+Ano\s+de\s+(\d{4})",
+        texto,
+        flags=re.IGNORECASE
+    )
+
+    if not padrao:
+        raise ValueError(
+            "Não foi possível identificar o ano da ficha financeira."
+        )
+
+    return int(
+        padrao.group(1)
+    )
+
+# ============================================================
+# PROCESSAR PASTA
+# ============================================================
+
+def processar_pasta(
+    caminho_pasta: Path,
     caminho_template: Path,
-    caminho_saida: Path,
 ) -> None:
 
-    print("Lendo PDF...")
-
-    texto = extrair_texto_pdf(
-        caminho_pdf
+    print(
+        f"Pasta de entrada: {caminho_pasta}"
     )
 
     # --------------------------------------------------------
-    # SEPARAR FICHAS
+    # LOCALIZAR PDFs
     # --------------------------------------------------------
 
-    fichas = separar_fichas(
-        texto
+    arquivos_pdf = sorted(
+        caminho_pasta.glob("*.pdf")
     )
 
-    if not fichas:
+    if not arquivos_pdf:
         raise ValueError(
-            "Nenhuma ficha financeira foi encontrada no PDF."
+            "Nenhum arquivo PDF foi encontrado na pasta."
         )
 
     print(
-        f"Fichas encontradas: {len(fichas)}"
+        f"PDFs encontrados: {len(arquivos_pdf)}"
     )
+
+    # --------------------------------------------------------
+    # LER TODOS OS PDFs
+    # --------------------------------------------------------
+
+    textos_pdfs = []
+
+    for caminho_pdf in arquivos_pdf:
+
+        print(
+            f"Lendo: {caminho_pdf.name}"
+        )
+
+        texto = extrair_texto_pdf(
+            caminho_pdf
+        )
+
+        ano = extrair_ano_pdf(
+            texto
+        )
+
+        textos_pdfs.append(
+            {
+                "arquivo": caminho_pdf,
+                "texto": texto,
+                "ano": ano,
+            }
+        )
 
     # --------------------------------------------------------
     # ABRIR TEMPLATE
@@ -590,171 +533,279 @@ def processar(
         data_only=False
     )
 
-    # --------------------------------------------------------
-    # SELECIONAR PLANILHA
-    # --------------------------------------------------------
-
     if NOME_ABA not in wb.sheetnames:
         raise ValueError(
             f"A aba '{NOME_ABA}' não foi encontrada no template."
         )
 
-    ws = wb[NOME_ABA]
-
     # --------------------------------------------------------
-    # ENCONTRAR ÚLTIMA LINHA DO ANEXO V
+    # ABA MODELO
     # --------------------------------------------------------
 
-    ultima_linha = encontrar_ultima_linha_preenchida(
-        ws
+    ws_template = wb[NOME_ABA]
+
+    # --------------------------------------------------------
+    # DESCOBRIR OS ANOS
+    # --------------------------------------------------------
+
+    anos = []
+
+    for item in textos_pdfs:
+
+        ano = item["ano"]
+
+        if ano not in anos:
+            anos.append(ano)
+
+    anos.sort()
+
+    print(
+        f"\nAnos encontrados: {', '.join(map(str, anos))}"
     )
 
-    linha = ultima_linha + 5
-
     # --------------------------------------------------------
-    # PROCESSAR CADA FICHA
+    # CRIAR TODAS AS ABAS ANTES DE PREENCHER
     # --------------------------------------------------------
 
-    for numero_ficha, texto_ficha in enumerate(
-        fichas,
+    abas_por_ano = {}
+
+    for indice, ano in enumerate(anos):
+
+        nome_aba = str(ano)
+
+        if indice == 0:
+
+            # A primeira aba utiliza o próprio template.
+            ws = ws_template
+
+            ws.title = nome_aba
+
+        else:
+
+            # As demais abas são cópias do template
+            # ainda vazio.
+            ws = wb.copy_worksheet(
+                ws_template
+            )
+
+            ws.title = nome_aba
+
+        abas_por_ano[nome_aba] = ws
+
+    # --------------------------------------------------------
+    # PROCESSAR OS PDFs
+    # --------------------------------------------------------
+
+    for numero_pdf, item in enumerate(
+        textos_pdfs,
         start=1
     ):
 
+        caminho_pdf = item["arquivo"]
+        texto = item["texto"]
+        ano = item["ano"]
+
         print(
-            f"\nProcessando ficha {numero_ficha}..."
+            f"\n{'=' * 60}"
+        )
+
+        print(
+            f"PDF {numero_pdf}/{len(textos_pdfs)}"
+        )
+
+        print(
+            f"Arquivo: {caminho_pdf.name}"
+        )
+
+        print(
+            f"Ano: {ano}"
         )
 
         # ----------------------------------------------------
-        # DADOS DO SERVIDOR
+        # PLANILHA DO ANO
         # ----------------------------------------------------
 
-        dados_servidor = extrair_dados_servidor(
-            texto_ficha
+        ws = abas_por_ano[
+            str(ano)
+        ]
+
+        # ----------------------------------------------------
+        # ENCONTRAR PRÓXIMA LINHA
+        # ----------------------------------------------------
+
+        ultima_linha = encontrar_ultima_linha_preenchida(
+            ws
+        )
+
+        linha = ultima_linha + 5
+
+        # ----------------------------------------------------
+        # SEPARAR FICHAS
+        # ----------------------------------------------------
+
+        fichas = separar_fichas(
+            texto
+        )
+
+        print(
+            f"Fichas encontradas: {len(fichas)}"
         )
 
         # ----------------------------------------------------
-        # RUBRICAS
+        # PROCESSAR CADA FICHA
         # ----------------------------------------------------
 
-        (
-            rubricas_vencimentos,
-            rubricas_descontos,
-        ) = extrair_rubricas(
-            texto_ficha
-        )
-
-        if not dados_servidor:
-            raise ValueError(
-                f"Não foi possível identificar os dados "
-                f"do servidor da ficha {numero_ficha}."
-            )
-
-        if (
-            not rubricas_vencimentos
-            and not rubricas_descontos
+        for numero_ficha, texto_ficha in enumerate(
+            fichas,
+            start=1
         ):
-            raise ValueError(
-                f"Nenhuma rubrica foi encontrada "
-                f"na ficha {numero_ficha}."
+
+            print(
+                f"\nProcessando ficha {numero_ficha}..."
             )
 
-        # ----------------------------------------------------
-        # DADOS DO SERVIDOR
-        # ----------------------------------------------------
+            # ------------------------------------------------
+            # DADOS DO SERVIDOR
+            # ------------------------------------------------
 
-        # A tabela possui 17 colunas (A:Q).
-        # Os dados do servidor ficam à direita.
+            dados_servidor = extrair_dados_servidor(
+                texto_ficha
+            )
 
-        coluna_dados = (
-            len(
-                ["Código", "Descrição", *COLUNAS_VALORES]
-            ) + 2
-        )
+            # ------------------------------------------------
+            # RUBRICAS
+            # ------------------------------------------------
 
-        ws.cell(
-            linha,
-            coluna_dados,
-            f"DADOS DO SERVIDOR - FICHA {numero_ficha}"
-        )
+            (
+                rubricas_vencimentos,
+                rubricas_descontos,
+            ) = extrair_rubricas(
+                texto_ficha
+            )
 
-        ws.cell(
-            linha,
-            coluna_dados
-        ).font = Font(
-            bold=True,
-            size=14
-        )
+            if not dados_servidor:
 
-        linha_dados = linha + 2
+                raise ValueError(
+                    f"Não foi possível identificar os dados "
+                    f"do servidor da ficha {numero_ficha}."
+                )
 
-        for campo, valor in dados_servidor.items():
+            if (
+                not rubricas_vencimentos
+                and not rubricas_descontos
+            ):
+
+                raise ValueError(
+                    f"Nenhuma rubrica foi encontrada "
+                    f"na ficha {numero_ficha}."
+                )
+
+            # ------------------------------------------------
+            # DADOS DO SERVIDOR
+            # ------------------------------------------------
+
+            coluna_dados = (
+                len(
+                    [
+                        "Código",
+                        "Descrição",
+                        *COLUNAS_VALORES
+                    ]
+                ) + 2
+            )
 
             ws.cell(
-                linha_dados,
+                linha,
                 coluna_dados,
-                campo
-            ).font = Font(
-                bold=True
+                f"DADOS DO SERVIDOR - FICHA {numero_ficha}"
             )
 
             ws.cell(
-                linha_dados,
-                coluna_dados + 1,
-                valor
+                linha,
+                coluna_dados
+            ).font = Font(
+                bold=True,
+                size=14
             )
 
-            linha_dados += 1
+            linha_dados = linha + 2
 
-        # ----------------------------------------------------
-        # VENCIMENTOS
-        # ----------------------------------------------------
+            for campo, valor in dados_servidor.items():
 
-        linha = escrever_tabela(
-            ws,
-            linha,
-            f"VENCIMENTOS - FICHA {numero_ficha}",
-            rubricas_vencimentos,
-        )
+                ws.cell(
+                    linha_dados,
+                    coluna_dados,
+                    campo
+                ).font = Font(
+                    bold=True
+                )
 
-        # ----------------------------------------------------
-        # DESCONTOS
-        # ----------------------------------------------------
+                ws.cell(
+                    linha_dados,
+                    coluna_dados + 1,
+                    valor
+                )
 
-        linha = escrever_tabela(
-            ws,
-            linha,
-            f"DESCONTOS - FICHA {numero_ficha}",
-            rubricas_descontos,
-        )
+                linha_dados += 1
 
-        # ----------------------------------------------------
-        # INFORMAÇÕES
-        # ----------------------------------------------------
+            # ------------------------------------------------
+            # VENCIMENTOS
+            # ------------------------------------------------
 
-        print(
-            f"  Servidor: "
-            f"{dados_servidor.get('Nome', 'não identificado')}"
-        )
+            linha = escrever_tabela(
+                ws,
+                linha,
+                f"VENCIMENTOS - FICHA {numero_ficha}",
+                rubricas_vencimentos,
+            )
 
-        print(
-            f"  Cargo: "
-            f"{dados_servidor.get('Cargo', 'não identificado')}"
-        )
+            # ------------------------------------------------
+            # DESCONTOS
+            # ------------------------------------------------
 
-        print(
-            f"  Ano: "
-            f"{dados_servidor.get('Ano', 'não identificado')}"
-        )
+            linha = escrever_tabela(
+                ws,
+                linha,
+                f"DESCONTOS - FICHA {numero_ficha}",
+                rubricas_descontos,
+            )
 
-        print(
-            f"  Vencimentos: "
-            f"{len(rubricas_vencimentos)} rubricas"
-        )
+            # ------------------------------------------------
+            # INFORMAÇÕES
+            # ------------------------------------------------
 
-        print(
-            f"  Descontos: "
-            f"{len(rubricas_descontos)} rubricas"
-        )
+            print(
+                f"  Servidor: "
+                f"{dados_servidor.get('Nome', 'não identificado')}"
+            )
+
+            print(
+                f"  Cargo: "
+                f"{dados_servidor.get('Cargo', 'não identificado')}"
+            )
+
+            print(
+                f"  Vencimentos: "
+                f"{len(rubricas_vencimentos)} rubricas"
+            )
+
+            print(
+                f"  Descontos: "
+                f"{len(rubricas_descontos)} rubricas"
+            )
+
+    # --------------------------------------------------------
+    # REMOVER ABA MODELO
+    # --------------------------------------------------------
+
+    # Depois que todas as abas foram criadas,
+    # Plan1 já não é mais necessária.
+    #
+    # Porém, se o primeiro ano utilizou a própria Plan1,
+    # ela já foi renomeada e não existe mais como Plan1.
+    if NOME_ABA in wb.sheetnames:
+
+        del wb[NOME_ABA]
 
     # --------------------------------------------------------
     # RECÁLCULO DAS FÓRMULAS
@@ -767,15 +818,15 @@ def processar(
         wb.calculation.calcMode = "auto"
 
     except AttributeError:
+
         pass
 
     # --------------------------------------------------------
     # SALVAR
     # --------------------------------------------------------
 
-    caminho_saida.parent.mkdir(
-        parents=True,
-        exist_ok=True
+    caminho_saida = (
+        caminho_pasta / "Ficha Financeira.xlsm"
     )
 
     wb.save(
@@ -783,9 +834,16 @@ def processar(
     )
 
     print(
-        f"\nExcel criado: {caminho_saida}"
+        f"\n{'=' * 60}"
     )
 
+    print(
+        f"Excel criado: {caminho_saida}"
+    )
+
+    print(
+        f"Abas criadas: {', '.join(abas_por_ano.keys())}"
+    )
 
 # ============================================================
 # MAIN
@@ -794,31 +852,30 @@ def processar(
 def main():
 
     if len(sys.argv) != 2:
-
         print(
-            "Uso: python src/main.py entrada.pdf"
+            "Uso: python src/main.py pasta"
         )
-
         sys.exit(1)
 
-    caminho_pdf = Path(
+    caminho_entrada = Path(
         sys.argv[1]
     )
 
-    if not caminho_pdf.exists():
+    # --------------------------------------------------------
+    # VERIFICAR ENTRADA
+    # --------------------------------------------------------
 
+    if not caminho_entrada.exists():
         print(
-            f"Arquivo não encontrado: {caminho_pdf}"
+            f"Arquivo ou pasta não encontrado: "
+            f"{caminho_entrada}"
         )
-
         sys.exit(1)
 
-    if caminho_pdf.suffix.lower() != ".pdf":
-
+    if not caminho_entrada.is_dir():
         print(
-            "O arquivo informado não é um PDF."
+            "A entrada informada não é uma pasta."
         )
-
         sys.exit(1)
 
     # --------------------------------------------------------
@@ -826,33 +883,17 @@ def main():
     # --------------------------------------------------------
 
     if not ARQUIVO_TEMPLATE.exists():
-
         print(
-            f"Template não encontrado: {ARQUIVO_TEMPLATE}"
+            f"Template não encontrado: "
+            f"{ARQUIVO_TEMPLATE}"
         )
 
         print(
             "Coloque o AnexoVMacro.xlsm na pasta "
-            "onde o programa está sendo executado."
+            "data."
         )
 
         sys.exit(1)
-
-    # --------------------------------------------------------
-    # SAÍDA
-    # --------------------------------------------------------
-
-    # Exemplo:
-    #
-    # entrada.pdf
-    #
-    # vira:
-    #
-    # entrada.xlsm
-
-    caminho_saida = caminho_pdf.with_suffix(
-        ".xlsm"
-    )
 
     # --------------------------------------------------------
     # PROCESSAR
@@ -860,16 +901,15 @@ def main():
 
     try:
 
-        processar(
-            caminho_pdf,
+        processar_pasta(
+            caminho_entrada,
             ARQUIVO_TEMPLATE,
-            caminho_saida,
         )
 
     except Exception as erro:
 
         print(
-            f"Erro: {erro}"
+            f"\nErro: {erro}"
         )
 
         sys.exit(1)
