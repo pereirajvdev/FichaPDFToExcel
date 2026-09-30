@@ -3,10 +3,14 @@ import sys
 from pathlib import Path
 
 import pdfplumber
-from openpyxl import Workbook
+from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
 
 COLUNAS_VALORES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -18,9 +22,21 @@ MESES = COLUNAS_VALORES[:12]
 
 PADRAO_DINHEIRO = r"-?\d{1,3}(?:\.\d{3})*,\d{2}"
 
+# Nome do arquivo usado como modelo
+ARQUIVO_TEMPLATE = Path(
+    r"C:\Users\Joao Castro\Desktop\JOAO\Anexo V\Servidores\AnexoVMacro.xlsm"
+)
+# Nome da aba do template
+NOME_ABA = "Plan1"
+
+
+# ============================================================
+# PDF
+# ============================================================
 
 def extrair_texto_pdf(caminho_pdf: Path) -> str:
     """Extrai o texto de todas as páginas do PDF."""
+
     paginas = []
 
     with pdfplumber.open(caminho_pdf) as pdf:
@@ -31,10 +47,21 @@ def extrair_texto_pdf(caminho_pdf: Path) -> str:
     return "\n".join(paginas)
 
 
+# ============================================================
+# VALORES
+# ============================================================
+
 def normalizar_valor(valor: str) -> float:
     """Converte valor brasileiro, como 1.234,56, para float."""
-    return float(valor.replace(".", "").replace(",", "."))
 
+    return float(
+        valor.replace(".", "").replace(",", ".")
+    )
+
+
+# ============================================================
+# DADOS DO SERVIDOR
+# ============================================================
 
 def extrair_dados_servidor(texto: str) -> dict:
     """Extrai os dados do servidor do cabeçalho da ficha."""
@@ -118,6 +145,10 @@ def extrair_dados_servidor(texto: str) -> dict:
     return dados
 
 
+# ============================================================
+# RUBRICAS
+# ============================================================
+
 def encontrar_divisor(texto: str) -> int:
     """
     Encontra a posição de 'Total de Vencimentos'.
@@ -143,8 +174,6 @@ def encontrar_divisor(texto: str) -> int:
 def extrair_rubricas(texto: str) -> tuple[list[dict], list[dict]]:
     """
     Extrai as rubricas e separa em Vencimentos e Descontos.
-
-    A divisão é feita pela posição do texto 'Total de Vencimentos'.
     """
 
     rubricas_vencimentos = []
@@ -190,7 +219,6 @@ def extrair_rubricas(texto: str) -> tuple[list[dict], list[dict]]:
             **dict(zip(COLUNAS_VALORES, valores)),
         }
 
-        # Descobre onde essa linha aparece no texto original.
         posicao_linha = texto.find(linha)
 
         if posicao_linha < divisor:
@@ -201,6 +229,37 @@ def extrair_rubricas(texto: str) -> tuple[list[dict], list[dict]]:
     return rubricas_vencimentos, rubricas_descontos
 
 
+# ============================================================
+# LOCALIZAR FIM DO TEMPLATE
+# ============================================================
+
+def encontrar_ultima_linha_preenchida(ws) -> int:
+    """
+    Encontra a última linha que realmente possui conteúdo
+    no template.
+
+    Isso evita depender de uma linha fixa como 33.
+    """
+
+    ultima_linha = 0
+
+    for row in ws.iter_rows():
+
+        for celula in row:
+
+            if celula.value is not None:
+                ultima_linha = max(
+                    ultima_linha,
+                    celula.row
+                )
+
+    return ultima_linha
+
+
+# ============================================================
+# ESCREVER TABELA
+# ============================================================
+
 def escrever_tabela(
     ws,
     linha_inicial: int,
@@ -209,14 +268,29 @@ def escrever_tabela(
 ) -> int:
     """Escreve uma tabela de rubricas e retorna a próxima linha."""
 
-    # Título da seção
-    ws.cell(linha_inicial, 1, titulo)
-    ws.cell(linha_inicial, 1).font = Font(
+    # --------------------------------------------------------
+    # TÍTULO
+    # --------------------------------------------------------
+
+    ws.cell(
+        linha_inicial,
+        1,
+        titulo
+    )
+
+    ws.cell(
+        linha_inicial,
+        1
+    ).font = Font(
         bold=True,
         size=13
     )
 
     linha_tabela = linha_inicial + 1
+
+    # --------------------------------------------------------
+    # CABEÇALHO
+    # --------------------------------------------------------
 
     cabecalho = [
         "Código",
@@ -224,15 +298,20 @@ def escrever_tabela(
         *COLUNAS_VALORES,
     ]
 
-    # Cabeçalho
-    for coluna, valor in enumerate(cabecalho, start=1):
+    for coluna, valor in enumerate(
+        cabecalho,
+        start=1
+    ):
+
         celula = ws.cell(
             linha_tabela,
             coluna,
             valor
         )
 
-        celula.font = Font(bold=True)
+        celula.font = Font(
+            bold=True
+        )
 
         celula.fill = PatternFill(
             "solid",
@@ -243,22 +322,30 @@ def escrever_tabela(
             horizontal="center"
         )
 
-    # Rubricas
+    # --------------------------------------------------------
+    # RUBRICAS
+    # --------------------------------------------------------
+
     for i, rubrica in enumerate(
         rubricas,
         start=linha_tabela + 1
     ):
+
         for coluna, campo in enumerate(
             cabecalho,
             start=1
         ):
+
             ws.cell(
                 i,
                 coluna,
                 rubrica[campo]
             )
 
-    # Formatação financeira
+    # --------------------------------------------------------
+    # FORMATAÇÃO FINANCEIRA
+    # --------------------------------------------------------
+
     primeira_coluna_valor = 3
 
     ultima_linha = (
@@ -271,44 +358,80 @@ def escrever_tabela(
         min_col=primeira_coluna_valor,
         max_col=len(cabecalho),
     ):
+
         for celula in row:
             celula.number_format = '#,##0.00'
 
-    # Filtro
-    if rubricas:
-        ws.auto_filter.ref = (
-            f"A{linha_tabela}:"
-            f"{get_column_letter(len(cabecalho))}"
-            f"{ultima_linha}"
-        )
+    # --------------------------------------------------------
+    # PRÓXIMA LINHA
+    # --------------------------------------------------------
 
-    # Próxima linha
     return ultima_linha + 2
 
 
-def criar_excel(
+# ============================================================
+# INSERIR DADOS NO TEMPLATE
+# ============================================================
+
+def inserir_dados_no_template(
+    caminho_template: Path,
     caminho_saida: Path,
     dados_servidor: dict,
     rubricas_vencimentos: list[dict],
     rubricas_descontos: list[dict],
 ) -> None:
 
-    wb = Workbook()
+    # --------------------------------------------------------
+    # ABRE O TEMPLATE
+    # --------------------------------------------------------
 
-    ws = wb.active
-    ws.title = "Ficha Financeira"
+    wb = load_workbook(
+        caminho_template,
+        keep_vba=True,
+        data_only=False
+    )
 
-    # =========================
+    # --------------------------------------------------------
+    # SELECIONA A PLANILHA
+    # --------------------------------------------------------
+
+    if NOME_ABA not in wb.sheetnames:
+        raise ValueError(
+            f"A aba '{NOME_ABA}' não foi encontrada no template."
+        )
+
+    ws = wb[NOME_ABA]
+
+    # --------------------------------------------------------
+    # ENCONTRA A ÚLTIMA LINHA DO ANEXO V
+    # --------------------------------------------------------
+
+    ultima_linha = encontrar_ultima_linha_preenchida(ws)
+
+    # Deixa uma linha em branco entre o template
+    # e os dados da ficha financeira.
+
+    linha = ultima_linha + 2
+
+    # --------------------------------------------------------
     # DADOS DO SERVIDOR
-    # =========================
+    # --------------------------------------------------------
 
-    ws["A1"] = "DADOS DO SERVIDOR"
-    ws["A1"].font = Font(
+    ws.cell(
+        linha,
+        1,
+        "DADOS DO SERVIDOR"
+    )
+
+    ws.cell(
+        linha,
+        1
+    ).font = Font(
         bold=True,
         size=14
     )
 
-    linha = 3
+    linha += 2
 
     for campo, valor in dados_servidor.items():
 
@@ -316,7 +439,9 @@ def criar_excel(
             linha,
             1,
             campo
-        ).font = Font(bold=True)
+        ).font = Font(
+            bold=True
+        )
 
         ws.cell(
             linha,
@@ -326,9 +451,9 @@ def criar_excel(
 
         linha += 1
 
-    # =========================
+    # --------------------------------------------------------
     # VENCIMENTOS
-    # =========================
+    # --------------------------------------------------------
 
     linha = escrever_tabela(
         ws,
@@ -337,9 +462,9 @@ def criar_excel(
         rubricas_vencimentos,
     )
 
-    # =========================
+    # --------------------------------------------------------
     # DESCONTOS
-    # =========================
+    # --------------------------------------------------------
 
     linha = escrever_tabela(
         ws,
@@ -348,29 +473,24 @@ def criar_excel(
         rubricas_descontos,
     )
 
-    # =========================
-    # LARGURAS
-    # =========================
+    # --------------------------------------------------------
+    # RECÁLCULO DAS FÓRMULAS
+    # --------------------------------------------------------
 
-    ws.column_dimensions["A"].width = 12
-    ws.column_dimensions["B"].width = 35
+    # O template continua contendo suas fórmulas.
+    # Esta configuração solicita ao Excel que recalcule
+    # as fórmulas quando o arquivo for aberto.
 
-    cabecalho = [
-        "Código",
-        "Descrição",
-        *COLUNAS_VALORES,
-    ]
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except AttributeError:
+        pass
 
-    for coluna in range(
-        3,
-        len(cabecalho) + 1
-    ):
-        ws.column_dimensions[
-            get_column_letter(coluna)
-        ].width = 14
-
-    # Congelar cabeçalho inicial
-    ws.freeze_panes = "A10"
+    # --------------------------------------------------------
+    # SALVAR NOVO ARQUIVO
+    # --------------------------------------------------------
 
     caminho_saida.parent.mkdir(
         parents=True,
@@ -380,12 +500,21 @@ def criar_excel(
     wb.save(caminho_saida)
 
 
+# ============================================================
+# PROCESSAMENTO
+# ============================================================
+
 def processar(
     caminho_pdf: Path,
-    caminho_excel: Path
+    caminho_template: Path,
+    caminho_saida: Path,
 ) -> None:
 
-    texto = extrair_texto_pdf(caminho_pdf)
+    print("Lendo PDF...")
+
+    texto = extrair_texto_pdf(
+        caminho_pdf
+    )
 
     dados_servidor = extrair_dados_servidor(
         texto
@@ -397,6 +526,7 @@ def processar(
     ) = extrair_rubricas(texto)
 
     if not dados_servidor:
+
         raise ValueError(
             "Não foi possível identificar "
             "os dados do servidor."
@@ -406,16 +536,24 @@ def processar(
         not rubricas_vencimentos
         and not rubricas_descontos
     ):
+
         raise ValueError(
             "Nenhuma rubrica foi encontrada no PDF."
         )
 
-    criar_excel(
-        caminho_excel,
+    print("Inserindo dados no template...")
+
+    inserir_dados_no_template(
+        caminho_template,
+        caminho_saida,
         dados_servidor,
         rubricas_vencimentos,
         rubricas_descontos,
     )
+
+    # --------------------------------------------------------
+    # INFORMAÇÕES
+    # --------------------------------------------------------
 
     print(
         f"Servidor: "
@@ -443,40 +581,96 @@ def processar(
     )
 
     print(
-        f"Excel criado: {caminho_excel}"
+        f"Excel criado: {caminho_saida}"
     )
 
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
 
     if len(sys.argv) != 2:
+
         print(
             "Uso: python src/main.py entrada.pdf"
         )
+
         sys.exit(1)
 
-    caminho_pdf = Path(sys.argv[1])
+    caminho_pdf = Path(
+        sys.argv[1]
+    )
 
     if not caminho_pdf.exists():
+
         print(
             f"Arquivo não encontrado: {caminho_pdf}"
         )
+
         sys.exit(1)
 
     if caminho_pdf.suffix.lower() != ".pdf":
+
         print(
             "O arquivo informado não é um PDF."
         )
+
         sys.exit(1)
 
-    caminho_excel = caminho_pdf.with_suffix(
-        ".xlsx"
+    # --------------------------------------------------------
+    # TEMPLATE
+    # --------------------------------------------------------
+
+    if not ARQUIVO_TEMPLATE.exists():
+
+        print(
+            f"Template não encontrado: {ARQUIVO_TEMPLATE}"
+        )
+
+        print(
+            "Coloque o AnexoVMacro.xlsm na pasta "
+            "onde o programa está sendo executado."
+        )
+
+        sys.exit(1)
+
+    # --------------------------------------------------------
+    # SAÍDA
+    # --------------------------------------------------------
+
+    # Exemplo:
+    #
+    # entrada.pdf
+    #
+    # vira:
+    #
+    # entrada.xlsm
+
+    caminho_saida = caminho_pdf.with_suffix(
+        ".xlsm"
     )
 
-    processar(
-        caminho_pdf,
-        caminho_excel
-    )
+    # --------------------------------------------------------
+    # PROCESSAR
+    # --------------------------------------------------------
+
+    try:
+
+        processar(
+            caminho_pdf,
+            ARQUIVO_TEMPLATE,
+            caminho_saida,
+        )
+
+    except Exception as erro:
+
+        print(
+            f"Erro: {erro}"
+        )
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":
