@@ -1,11 +1,12 @@
 import re
 import sys
-from pathlib import Path
-
 import pdfplumber
+
+from pathlib import Path
+from datetime import date
 from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Alignment
 
 
 # ============================================================
@@ -775,6 +776,10 @@ def processar_pasta(
     # CRIAR TODAS AS ABAS ANTES DE PREENCHER
     # --------------------------------------------------------
 
+    # --------------------------------------------------------
+    # CRIAR TODAS AS ABAS ANTES DE PREENCHER
+    # --------------------------------------------------------
+
     abas_por_ano = {}
 
     for indice, ano in enumerate(anos):
@@ -782,21 +787,21 @@ def processar_pasta(
         nome_aba = str(ano)
 
         if indice == 0:
-
             # A primeira aba utiliza o próprio template.
             ws = ws_template
-
             ws.title = nome_aba
-
         else:
-
             # As demais abas são cópias do template
             # ainda vazio.
             ws = wb.copy_worksheet(
                 ws_template
             )
-
             ws.title = nome_aba
+
+        # ----------------------------------------------------
+        # DATA DE REFERÊNCIA: FEVEREIRO DO ANO DA FICHA
+        # ----------------------------------------------------
+        ws["I2"] = date(ano, 2, 1)
 
         abas_por_ano[nome_aba] = ws
 
