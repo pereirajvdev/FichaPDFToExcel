@@ -20,7 +20,7 @@ COLUNAS_VALORES = [
 
 MESES = COLUNAS_VALORES[:12]
 
-PADRAO_DINHEIRO = r"-?\d{1,3}(?:\.\d{3})*,\d{2}"
+PADRAO_DINHEIRO = r"(?<![\d.])-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}"
 
 # Nome do arquivo usado como modelo
 ARQUIVO_TEMPLATE = Path(
@@ -145,6 +145,56 @@ def extrair_dados_servidor(texto: str) -> dict:
     return dados
 
 
+def extrair_dados_servidor_modelo_antigo(texto: str) -> dict:
+    """
+    Extrai os dados do servidor no modelo antigo de ficha financeira.
+    """
+
+    dados = {}
+
+    # --------------------------------------------------------
+    # MATRÍCULA + NOME
+    # --------------------------------------------------------
+
+    padrao = re.search(
+        r"(?m)^Matricula:\s*(\d+)\s+(.+?)\s*$",
+        texto,
+        flags=re.IGNORECASE
+    )
+
+    if padrao:
+        dados["Matrícula"] = padrao.group(1)
+        dados["Nome"] = padrao.group(2).strip()
+
+    # --------------------------------------------------------
+    # CARGO
+    # --------------------------------------------------------
+
+    padrao = re.search(
+        r"(?m)^Cargo:\s*(.+?)\s*$",
+        texto,
+        flags=re.IGNORECASE
+    )
+
+    if padrao:
+        dados["Cargo"] = padrao.group(1).strip()
+
+    # --------------------------------------------------------
+    # ANO
+    # --------------------------------------------------------
+
+    padrao = re.search(
+        r"Relatório\s+da\s+Ficha\s+Financeira\s+(\d{4})",
+        texto,
+        flags=re.IGNORECASE
+    )
+
+    if padrao:
+        dados["Ano"] = int(padrao.group(1))
+
+    return dados
+
+
 # ============================================================
 # RUBRICAS
 # ============================================================
@@ -227,6 +277,112 @@ def extrair_rubricas(texto: str) -> tuple[list[dict], list[dict]]:
             rubricas_descontos.append(rubrica)
 
     return rubricas_vencimentos, rubricas_descontos
+
+
+def extrair_rubricas_modelo_antigo(texto: str) -> tuple[list[dict], list[dict]]:
+    """
+    Extrai rubricas do modelo antigo de ficha financeira.
+
+    No modelo antigo:
+    - cada rubrica aparece dentro de um mês;
+    - existe apenas um valor por rubrica;
+    - os valores são distribuídos nas colunas dos meses;
+    - vencimentos e descontos são identificados pelo código.
+    """
+
+    rubricas_vencimentos = {}
+    rubricas_descontos = {}
+
+    mes_atual = None
+
+    mapa_meses = {
+        "janeiro": "Janeiro",
+        "fevereiro": "Fevereiro",
+        "março": "Março",
+        "abril": "Abril",
+        "maio": "Maio",
+        "junho": "Junho",
+        "julho": "Julho",
+        "agosto": "Agosto",
+        "setembro": "Setembro",
+        "outubro": "Outubro",
+        "novembro": "Novembro",
+        "dezembro": "Dezembro",
+    }
+
+    # Códigos que aparecem como descontos no modelo antigo.
+    codigos_desconto = {
+        "403",
+        "413",
+        "500",
+        "798",
+    }
+
+    padrao_rubrica = re.compile(
+        r"^(\d{3})\s+(.+?)\s+"
+        r"(-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})$"
+    )
+
+    for linha in texto.splitlines():
+
+        linha = linha.strip()
+
+        # --------------------------------------------------------
+        # IDENTIFICAR MÊS
+        # --------------------------------------------------------
+
+        mes_normalizado = linha.lower()
+
+        if mes_normalizado in mapa_meses:
+            mes_atual = mapa_meses[mes_normalizado]
+            continue
+
+        if mes_atual is None:
+            continue
+
+        # --------------------------------------------------------
+        # IDENTIFICAR RUBRICA
+        # --------------------------------------------------------
+
+        correspondencia = padrao_rubrica.match(linha)
+
+        if not correspondencia:
+            continue
+
+        codigo = correspondencia.group(1)
+        descricao = correspondencia.group(2).strip()
+        valor = normalizar_valor(
+            correspondencia.group(3)
+        )
+
+        # --------------------------------------------------------
+        # ESCOLHER VENCIMENTO OU DESCONTO
+        # --------------------------------------------------------
+
+        if codigo in codigos_desconto:
+            destino = rubricas_descontos
+        else:
+            destino = rubricas_vencimentos
+
+        chave = (codigo, descricao)
+
+        if chave not in destino:
+
+            destino[chave] = {
+                "Código": codigo,
+                "Descrição": descricao,
+                **{
+                    coluna: 0.0
+                    for coluna in COLUNAS_VALORES
+                }
+            }
+
+        destino[chave][mes_atual] = valor
+
+    return (
+        list(rubricas_vencimentos.values()),
+        list(rubricas_descontos.values()),
+    )
 
 
 # ============================================================
@@ -359,26 +515,81 @@ def escrever_tabela(
         min_col=primeira_coluna_valor,
         max_col=len(cabecalho),
     ):
-
         for celula in row:
             celula.number_format = '#,##0.00'
 
-    # --------------------------------------------------------
-    # PRÓXIMA LINHA
-    # --------------------------------------------------------
+    # ========================================================
+    # LINHA DE TOTAL
+    # ========================================================
 
-    return ultima_linha + 2
+    linha_total = ultima_linha + 1
+
+    ws.cell(
+        linha_total,
+        1,
+        f"TOTAL {titulo}"
+    )
+
+    ws.cell(
+        linha_total,
+        1
+    ).font = Font(
+        bold=True
+    )
+
+    for coluna in range(
+        primeira_coluna_valor,
+        len(cabecalho) + 1
+    ):
+
+        letra_coluna = get_column_letter(
+            coluna
+        )
+
+        ws.cell(
+            linha_total,
+            coluna,
+            f"=SUM({letra_coluna}{linha_tabela + 1}:{letra_coluna}{ultima_linha})"
+        )
+
+        ws.cell(
+            linha_total,
+            coluna
+        ).number_format = '#,##0.00'
+
+        ws.cell(
+            linha_total,
+            coluna
+        ).font = Font(
+            bold=True
+        )
+
+    return linha_total + 2
 
 
 def separar_fichas(texto: str) -> list[str]:
     """
-    Separa as fichas financeiras individuais.
+    Separa fichas financeiras individuais.
 
-    O PDF pode repetir o cabeçalho em páginas seguintes.
-    Por isso, após separar pelas ocorrências do cabeçalho,
-    somente trechos que contenham os totais da ficha são
-    considerados fichas válidas.
+    Suporta:
+    - Modelo novo: Ficha Financeira Resumo Geral do Ano de YYYY
+    - Modelo antigo: Relatório da Ficha Financeira YYYY
     """
+
+    # ============================================================
+    # MODELO ANTIGO
+    # ============================================================
+
+    if re.search(
+        r"Relatório\s+da\s+Ficha\s+Financeira\s+\d{4}",
+        texto,
+        flags=re.IGNORECASE
+    ):
+        return [texto.strip()]
+
+    # ============================================================
+    # MODELO NOVO
+    # ============================================================
 
     padrao = re.compile(
         r"Ficha\s+Financeira\s+Resumo\s+Geral\s+do\s+Ano\s+de\s+\d{4}",
@@ -405,13 +616,7 @@ def separar_fichas(texto: str) -> list[str]:
         else:
             fim = len(texto)
 
-        trecho = texto[
-            inicio:fim
-        ].strip()
-
-        # ----------------------------------------------------
-        # VALIDAR SE É UMA FICHA REAL
-        # ----------------------------------------------------
+        trecho = texto[inicio:fim].strip()
 
         possui_vencimentos = re.search(
             r"Total\s+de\s+Vencimentos",
@@ -425,13 +630,8 @@ def separar_fichas(texto: str) -> list[str]:
             flags=re.IGNORECASE
         )
 
-        if (
-            possui_vencimentos
-            and possui_descontos
-        ):
-            fichas.append(
-                trecho
-            )
+        if possui_vencimentos and possui_descontos:
+            fichas.append(trecho)
 
     if not fichas:
         raise ValueError(
@@ -448,21 +648,29 @@ def separar_fichas(texto: str) -> list[str]:
 def extrair_ano_pdf(texto: str) -> int:
     """
     Extrai o ano da ficha financeira.
+
+    Aceita diferentes formatos de cabeçalho:
+    - Ficha Financeira Resumo Geral do Ano de 2014
+    - Relatório da Ficha Financeira 2002
     """
 
-    padrao = re.search(
+    padroes = [
         r"Ficha\s+Financeira\s+Resumo\s+Geral\s+do\s+Ano\s+de\s+(\d{4})",
-        texto,
-        flags=re.IGNORECASE
-    )
+        r"Relatório\s+da\s+Ficha\s+Financeira\s+(\d{4})",
+    ]
 
-    if not padrao:
-        raise ValueError(
-            "Não foi possível identificar o ano da ficha financeira."
+    for padrao in padroes:
+        resultado = re.search(
+            padrao,
+            texto,
+            flags=re.IGNORECASE
         )
 
-    return int(
-        padrao.group(1)
+        if resultado:
+            return int(resultado.group(1))
+
+    raise ValueError(
+        "Não foi possível identificar o ano da ficha financeira."
     )
 
 # ============================================================
@@ -668,20 +876,41 @@ def processar_pasta(
             # DADOS DO SERVIDOR
             # ------------------------------------------------
 
-            dados_servidor = extrair_dados_servidor(
-                texto_ficha
-            )
+            if re.search(
+                r"Relatório\s+da\s+Ficha\s+Financeira\s+\d{4}",
+                texto_ficha,
+                flags=re.IGNORECASE
+            ):
+                dados_servidor = extrair_dados_servidor_modelo_antigo(
+                    texto_ficha
+                )
+            else:
+                dados_servidor = extrair_dados_servidor(
+                    texto_ficha
+                )
 
             # ------------------------------------------------
             # RUBRICAS
             # ------------------------------------------------
 
-            (
-                rubricas_vencimentos,
-                rubricas_descontos,
-            ) = extrair_rubricas(
-                texto_ficha
-            )
+            if re.search(
+                r"Relatório\s+da\s+Ficha\s+Financeira\s+\d{4}",
+                texto_ficha,
+                flags=re.IGNORECASE
+            ):
+                (
+                    rubricas_vencimentos,
+                    rubricas_descontos,
+                ) = extrair_rubricas_modelo_antigo(
+                    texto_ficha
+                )
+            else:
+                (
+                    rubricas_vencimentos,
+                    rubricas_descontos,
+                ) = extrair_rubricas(
+                    texto_ficha
+                )
 
             if not dados_servidor:
 
