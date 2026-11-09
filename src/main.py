@@ -24,9 +24,8 @@ MESES = COLUNAS_VALORES[:12]
 PADRAO_DINHEIRO = r"(?<![\d.])-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}"
 
 # Nome do arquivo usado como modelo
-ARQUIVO_TEMPLATE = Path(
-    r"data\AnexoVMacro.xlsm"
-)
+RAIZ_PROJETO = Path(__file__).resolve().parents[1]   # se o arquivo está em src/
+ARQUIVO_TEMPLATE = RAIZ_PROJETO / "data" / "AnexoVMacro.xlsm"
 # Nome da aba do template
 NOME_ABA = "Plan1"
 
@@ -771,10 +770,6 @@ def processar_pasta(
     print(
         f"\nAnos encontrados: {', '.join(map(str, anos))}"
     )
-
-    # --------------------------------------------------------
-    # CRIAR TODAS AS ABAS ANTES DE PREENCHER
-    # --------------------------------------------------------
 
     # --------------------------------------------------------
     # CRIAR TODAS AS ABAS ANTES DE PREENCHER
