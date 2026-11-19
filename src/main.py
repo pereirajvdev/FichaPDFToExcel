@@ -1163,7 +1163,9 @@ def processar_pasta(
             )
 
             # INSS: ignora INSS do 13º e outras descrições que apenas mencionam INSS
-            if "INSS" in descricao_b_norm:
+            if "INSS" in descricao_b_norm and not any(
+                termo in descricao_b_norm for termo in ("13", "FAM")
+            ):
                 if referencias["C12"] is None:
                     referencias["C12"] = f"=C{row}"
                     print(f"[INSS] B{row} = {descricao_b!r}")
