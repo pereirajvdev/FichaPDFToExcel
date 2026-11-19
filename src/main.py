@@ -279,15 +279,14 @@ def extrair_rubricas(texto: str) -> tuple[list[dict], list[dict]]:
     return rubricas_vencimentos, rubricas_descontos
 
 
-def extrair_rubricas_modelo_antigo(texto: str) -> tuple[list[dict], list[dict]]:
-    """
-    Extrai rubricas do modelo antigo de ficha financeira.
 
-    No modelo antigo:
-    - cada rubrica aparece dentro de um mês;
-    - existe apenas um valor por rubrica;
-    - os valores são distribuídos nas colunas dos meses;
-    - vencimentos e descontos são identificados pelo código.
+def extrair_rubricas_modelo_antigo(caminho_pdf: Path) -> tuple[list[dict], list[dict]]:
+    """
+    Extrai rubricas do modelo antigo utilizando a posição
+    horizontal do valor para identificar vencimentos e descontos.
+
+    - Valor à esquerda: vencimento.
+    - Valor à direita: desconto.
     """
 
     rubricas_vencimentos = {}
@@ -310,79 +309,121 @@ def extrair_rubricas_modelo_antigo(texto: str) -> tuple[list[dict], list[dict]]:
         "dezembro": "Dezembro",
     }
 
-    # Códigos que aparecem como descontos no modelo antigo.
-    codigos_desconto = {
-        "403",
-        "413",
-        "500",
-        "798",
-    }
+    # Ponto de separação entre as duas colunas.
+    # Valores à direita dessa posição são descontos.
+    LIMITE_COLUNA_DESCONTO = 450
 
-    padrao_rubrica = re.compile(
-        r"^(\d{3})\s+(.+?)\s+"
-        r"(-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})$"
-    )
+    padrao_valor = re.compile(PADRAO_DINHEIRO)
 
-    for linha in texto.splitlines():
+    with pdfplumber.open(caminho_pdf) as pdf:
 
-        linha = linha.strip()
+        for pagina in pdf.pages:
 
-        # --------------------------------------------------------
-        # IDENTIFICAR MÊS
-        # --------------------------------------------------------
+            palavras = pagina.extract_words(
+                x_tolerance=2,
+                y_tolerance=2
+            )
 
-        mes_normalizado = linha.lower()
+            # Agrupar palavras que pertencem à mesma linha.
+            linhas = {}
 
-        if mes_normalizado in mapa_meses:
-            mes_atual = mapa_meses[mes_normalizado]
-            continue
+            for palavra in palavras:
 
-        if mes_atual is None:
-            continue
+                chave = round(palavra["top"], 1)
 
-        # --------------------------------------------------------
-        # IDENTIFICAR RUBRICA
-        # --------------------------------------------------------
+                linhas.setdefault(chave, []).append(palavra)
 
-        correspondencia = padrao_rubrica.match(linha)
+            for palavras_linha in linhas.values():
 
-        if not correspondencia:
-            continue
+                palavras_linha.sort(
+                    key=lambda p: p["x0"]
+                )
 
-        codigo = correspondencia.group(1)
-        descricao = correspondencia.group(2).strip()
-        valor = normalizar_valor(
-            correspondencia.group(3)
-        )
+                textos = [
+                    p["text"]
+                    for p in palavras_linha
+                ]
 
-        # --------------------------------------------------------
-        # ESCOLHER VENCIMENTO OU DESCONTO
-        # --------------------------------------------------------
+                linha = " ".join(textos).strip()
 
-        if codigo in codigos_desconto:
-            destino = rubricas_descontos
-        else:
-            destino = rubricas_vencimentos
+                # --------------------------------------------
+                # IDENTIFICAR MÊS
+                # --------------------------------------------
 
-        chave = (codigo, descricao)
+                mes_normalizado = linha.lower().strip()
 
-        if chave not in destino:
+                if mes_normalizado in mapa_meses:
+                    mes_atual = mapa_meses[mes_normalizado]
+                    continue
 
-            destino[chave] = {
-                "Código": codigo,
-                "Descrição": descricao,
-                **{
-                    coluna: 0.0
-                    for coluna in COLUNAS_VALORES
-                }
-            }
+                if mes_atual is None:
+                    continue
 
-        destino[chave][mes_atual] = valor
+                # --------------------------------------------
+                # IDENTIFICAR RUBRICA
+                # --------------------------------------------
+
+                if not textos or not re.fullmatch(r"\d{3}", textos[0]):
+                    continue
+
+                codigo = textos[0]
+
+                # Localizar os valores monetários e suas posições.
+                valores_encontrados = []
+
+                for indice, palavra in enumerate(palavras_linha):
+
+                    if padrao_valor.fullmatch(palavra["text"]):
+
+                        valores_encontrados.append({
+                            "indice": indice,
+                            "valor": normalizar_valor(palavra["text"]),
+                            "x": palavra["x0"],
+                        })
+
+                if not valores_encontrados:
+                    continue
+
+                # A descrição contém tudo entre o código
+                # e o primeiro valor monetário.
+                primeiro_valor = valores_encontrados[0]
+
+                descricao = " ".join(
+                    textos[1:primeiro_valor["indice"]]
+                ).strip()
+
+                # --------------------------------------------
+                # CLASSIFICAR PELA POSIÇÃO DO VALOR
+                # --------------------------------------------
+
+                valor = primeiro_valor["valor"]
+                posicao_x = primeiro_valor["x"]
+
+                if posicao_x >= LIMITE_COLUNA_DESCONTO:
+                    destino = rubricas_descontos
+                else:
+                    destino = rubricas_vencimentos
+
+                chave = (codigo, descricao)
+
+                if chave not in destino:
+
+                    destino[chave] = {
+                        "Código": codigo,
+                        "Descrição": descricao,
+                        **{
+                            coluna: 0.0
+                            for coluna in COLUNAS_VALORES
+                        }
+                    }
+
+                destino[chave][mes_atual] = valor
 
     return (
         list(rubricas_vencimentos.values()),
         list(rubricas_descontos.values()),
     )
+
 
 
 # ============================================================
@@ -941,7 +982,7 @@ def processar_pasta(
                     rubricas_vencimentos,
                     rubricas_descontos,
                 ) = extrair_rubricas_modelo_antigo(
-                    texto_ficha
+                    caminho_pdf
                 )
             else:
                 (
