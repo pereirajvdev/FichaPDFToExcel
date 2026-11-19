@@ -1131,24 +1131,86 @@ def processar_pasta(
 
         pass
 
+        # --------------------------------------------------------
+    # VINCULAR INFORMAÇÕES DA FICHA À CÉLULAS
     # --------------------------------------------------------
-    # VINCULAR INSS À CÉLULA C12
-    # --------------------------------------------------------
 
-    for row in range(1, ws.max_row + 1):
+    print("\n" + "=" * 60)
+    print("INICIANDO VINCULAÇÃO DAS INFORMAÇÕES")
+    print("=" * 60)
 
-        descricao = ws.cell(row, 2).value
+    for ws in abas_por_ano.values():
 
-        if descricao and "INSS" in str(descricao).upper():
+        print(f"\nAnalisando aba: {ws.title}")
 
-            ws["C12"] = f"=C{row}"
+        referencias = {
+            "C12": None,
+            "D12": None,
+            "E12": None,
+        }
 
-            print(
-                f"INSS encontrado em B{row}. "
-                f"C12 = C{row}"
+        for row in range(1, ws.max_row + 1):
+
+            descricao_a = str(ws.cell(row, 1).value or "").upper()
+            descricao_b = str(ws.cell(row, 2).value or "").upper()
+
+            descricao_a_norm = (
+                descricao_a.replace(".", "").replace(" ", "")
             )
 
-            break
+            descricao_b_norm = (
+                descricao_b.replace(".", "").replace(" ", "")
+            )
+
+            # INSS: ignora INSS do 13º e outras descrições que apenas mencionam INSS
+            if "INSS" in descricao_b_norm:
+                if referencias["C12"] is None:
+                    referencias["C12"] = f"=C{row}"
+                    print(f"[INSS] B{row} = {descricao_b!r}")
+
+            # Total de vencimentos
+            if (
+                "TOTALVENCIMENTOS" in descricao_a_norm
+                or "TOTALDEVENCIMENTOS" in descricao_a_norm
+            ):
+                if referencias["D12"] is None:
+                    referencias["D12"] = f"=C{row}"
+                    print(f"[VENCIMENTOS] A{row} = {descricao_a!r}")
+
+            # Desconto de adiantamento salarial
+            if (
+                "DESCADSAL" in descricao_b_norm
+                or "DESCADTOSALARIAL" in descricao_b_norm
+            ):
+                if referencias["E12"] is None:
+                    referencias["E12"] = f"=C{row}"
+                    print(f"[ADIANTAMENTO] B{row} = {descricao_b!r}")
+
+        # Aplicar referências, substituindo valores anteriores
+        for celula, formula in referencias.items():
+
+            if formula:
+                valor_anterior = ws[celula].value
+                ws[celula] = formula
+
+                print(
+                    f"[ATUALIZADO] {ws.title}!{celula}: "
+                    f"{valor_anterior!r} -> {formula}"
+                )
+            else:
+                print(
+                    f"[NÃO ENCONTRADO] {ws.title}!{celula}: "
+                    "nenhuma descrição correspondente."
+                )
+
+        print(
+            f"[RESULTADO] C12={ws['C12'].value!r} | "
+            f"D12={ws['D12'].value!r} | "
+            f"E12={ws['E12'].value!r}"
+        )
+
+    print("\nVINCULAÇÃO FINALIZADA")
+            
     # --------------------------------------------------------
     # SALVAR
     # --------------------------------------------------------
