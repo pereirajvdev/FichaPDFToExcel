@@ -567,6 +567,7 @@ def escrever_tabela(
     return linha_total + 2
 
 
+
 def separar_fichas(texto: str) -> list[str]:
     """
     Separa fichas financeiras individuais.
@@ -574,6 +575,9 @@ def separar_fichas(texto: str) -> list[str]:
     Suporta:
     - Modelo novo: Ficha Financeira Resumo Geral do Ano de YYYY
     - Modelo antigo: Relatório da Ficha Financeira YYYY
+
+    No modelo novo, identifica cabeçalhos repetidos entre páginas
+    e mantém todas as páginas pertencentes à mesma ficha.
     """
 
     # ============================================================
@@ -596,25 +600,59 @@ def separar_fichas(texto: str) -> list[str]:
         flags=re.IGNORECASE
     )
 
-    ocorrencias = list(
-        padrao.finditer(texto)
-    )
+    ocorrencias = list(padrao.finditer(texto))
 
     if not ocorrencias:
         raise ValueError(
             "Não foi encontrada nenhuma ficha financeira no PDF."
         )
 
-    fichas = []
+    # ------------------------------------------------------------
+    # IDENTIFICAR O INÍCIO REAL DE CADA FICHA
+    # ------------------------------------------------------------
 
-    for i, ocorrencia in enumerate(ocorrencias):
+    inicios = []
+
+    for indice, ocorrencia in enumerate(ocorrencias):
 
         inicio = ocorrencia.start()
 
-        if i + 1 < len(ocorrencias):
-            fim = ocorrencias[i + 1].start()
-        else:
-            fim = len(texto)
+        fim = (
+            ocorrencias[indice + 1].start()
+            if indice + 1 < len(ocorrencias)
+            else len(texto)
+        )
+
+        trecho = texto[inicio:fim]
+
+        # Uma nova ficha precisa apresentar matrícula e nome
+        # antes dos dados da próxima ocorrência do cabeçalho.
+        possui_servidor = re.search(
+            r"(?m)^\s*\d{6}\s+.+?\s+Secretaria:",
+            trecho
+        )
+
+        if possui_servidor:
+            inicios.append(inicio)
+
+    if not inicios:
+        raise ValueError(
+            "Não foi possível identificar o início de nenhuma ficha financeira."
+        )
+
+    # ------------------------------------------------------------
+    # SEPARAR AS FICHAS COMPLETAS
+    # ------------------------------------------------------------
+
+    fichas = []
+
+    for indice, inicio in enumerate(inicios):
+
+        fim = (
+            inicios[indice + 1]
+            if indice + 1 < len(inicios)
+            else len(texto)
+        )
 
         trecho = texto[inicio:fim].strip()
 
@@ -639,6 +677,7 @@ def separar_fichas(texto: str) -> list[str]:
         )
 
     return fichas
+
 
 
 # ============================================================
