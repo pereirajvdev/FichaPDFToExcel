@@ -872,6 +872,7 @@ def processar_pasta(
                 ws_template
             )
             ws.title = nome_aba
+            ws.freeze_panes = "A26"
 
         # ----------------------------------------------------
         # DATA DE REFERÊNCIA: FEVEREIRO DO ANO DA FICHA
@@ -1130,6 +1131,24 @@ def processar_pasta(
 
         pass
 
+    # --------------------------------------------------------
+    # VINCULAR INSS À CÉLULA C12
+    # --------------------------------------------------------
+
+    for row in range(1, ws.max_row + 1):
+
+        descricao = ws.cell(row, 2).value
+
+        if descricao and "INSS" in str(descricao).upper():
+
+            ws["C12"] = f"=C{row}"
+
+            print(
+                f"INSS encontrado em B{row}. "
+                f"C12 = C{row}"
+            )
+
+            break
     # --------------------------------------------------------
     # SALVAR
     # --------------------------------------------------------
